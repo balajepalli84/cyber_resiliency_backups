@@ -206,6 +206,19 @@ for instance in instances:
     blockstorage_client.delete_boot_volume(restored_volume.id)
     print(f"Deleting restored volume... Volume OCID: {restored_volume.id}")
 
-print("Process completed successfully.")
-current_datetime = datetime.now()
-print(f"Endtime is {current_datetime}")
+    # Delete the custom image
+    compute_client.delete_image(custom_image.id)
+    print(f"Deleting custom image... Image OCID: {custom_image.id}")
+
+    # Delete the boot volume backup
+    blockstorage_client.delete_boot_volume_backup(boot_volume_backup_response.id)
+    print(f"Deleting boot volume backup... Backup OCID: {boot_volume_backup_response.id}")
+
+    # Delete the attached volume backups
+    for attached_vol_backup_id in attached_vol_backup_ocid:
+        blockstorage_client.delete_volume_backup(attached_vol_backup_id)
+        print(f"Deleting volume backup... Backup OCID: {attached_vol_backup_id}")
+
+    print("Process completed successfully.")
+    current_datetime = datetime.now()
+    print(f"Endtime is {current_datetime}")
