@@ -227,6 +227,9 @@ for instance in instances:
 
     print("Image exported to Object Storage successfully.")
 
+
+
+
     # Cleanup: Terminate the temporary instance and delete the restored volume
     compute_client.terminate_instance(instance.id, preserve_boot_volume=False)
     print(f"Terminating temporary instance... Instance OCID: {instance.id}")
@@ -240,13 +243,14 @@ for instance in instances:
             print(f"Current state: {instance.lifecycle_state}. Waiting for termination...")
             time.sleep(10)  # Wait for 10 seconds before checking again
 
-    blockstorage_client.delete_boot_volume(restored_volume.id)
-    print(f"Deleting restored volume... Volume OCID: {restored_volume.id}")
-
     # Delete the custom image
     compute_client.delete_image(custom_image.id)
     print(f"Deleting custom image... Image OCID: {custom_image.id}")
 
+    #delete block volumes
+    for restored_block_volume in restored_block_volumes:
+        print(f"Deleting block volume {restored_block_volume.id}")
+        blockstorage_client.delete_volume_backup(restored_block_volume.id)
     # Delete the boot volume backup
     blockstorage_client.delete_boot_volume_backup(boot_volume_backup_response.id)
     print(f"Deleting boot volume backup... Backup OCID: {boot_volume_backup_response.id}")
