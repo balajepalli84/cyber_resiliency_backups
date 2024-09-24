@@ -218,9 +218,9 @@ for instance in instances:
     # Delete the attached volume backups
     for volume_data in restored_volumes:
         blockstorage_client.delete_volume(volume_data['volume_id'])
-
+    print("Restored volumes are terminated.")
     for vol_backup_id in attached_vol_backup_ocids:
         blockstorage_client.delete_volume_backup(vol_backup_id)
-
-    print("Process completed successfully.")
-    current_datetime = datetime.now()
+    print("Volume backups are terminated.")
+print("Process completed successfully.")
+current_datetime = datetime.now()
