@@ -203,3 +203,24 @@ for instance in instances:
         print(error2)
 
     ssh.close()
+
+# Cleanup: Terminate the temporary instance and delete the restored volume
+compute_client.terminate_instance(new_instance.id, preserve_boot_volume=False)
+print(f"Terminating temporary instance... Instance OCID: {new_instance.id}")
+while True:
+    instance = compute_client.get_instance(instance.id).data
+    if instance.lifecycle_state == 'TERMINATED':
+        print("Instance is terminated.")
+        break
+    else:
+        print(f"Current state: {instance.lifecycle_state}. Waiting for termination...")
+        time.sleep(10)  # Wait for 10 seconds before checking again
+# Delete the attached volume backups
+for volume_data in restored_volumes:
+    blockstorage_client.delete_volume(volume_data['volume_id'])
+
+for vol_backup_id in attached_vol_backup_ocids:
+    blockstorage_client.delete_volume_backup(vol_backup_id)
+
+print("Process completed successfully.")
+current_datetime = datetime.now()
