@@ -1,4 +1,4 @@
-import oci
+import oci,sys
 import time
 from datetime import datetime
 import random, string
@@ -176,7 +176,8 @@ for instance in instances:
         compartment_id=compartment_id,
         instance_id=new_instance.id).data
     response_get_vnic = network_client.get_vnic(list_vnic_attachments_response[0].vnic_id).data
-
+    instance_status = compute_client.get_instance(new_instance.id).data.lifecycle_state
+    time.sleep(30)
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
@@ -203,24 +204,23 @@ for instance in instances:
         print(error2)
 
     ssh.close()
+    # Cleanup: Terminate the temporary instance and delete the restored volume
+    compute_client.terminate_instance(new_instance.id, preserve_boot_volume=False)
+    print(f"Terminating temporary instance... Instance OCID: {new_instance.id}")
+    while True:
+        instance = compute_client.get_instance(new_instance.id).data
+        if instance.lifecycle_state == 'TERMINATED':
+            print("Instance is terminated.")
+            break
+        else:
+            print(f"Current state: {instance.lifecycle_state}. Waiting for termination...")
+            time.sleep(10)  # Wait for 10 seconds before checking again
+    # Delete the attached volume backups
+    for volume_data in restored_volumes:
+        blockstorage_client.delete_volume(volume_data['volume_id'])
 
-# Cleanup: Terminate the temporary instance and delete the restored volume
-compute_client.terminate_instance(new_instance.id, preserve_boot_volume=False)
-print(f"Terminating temporary instance... Instance OCID: {new_instance.id}")
-while True:
-    instance = compute_client.get_instance(instance.id).data
-    if instance.lifecycle_state == 'TERMINATED':
-        print("Instance is terminated.")
-        break
-    else:
-        print(f"Current state: {instance.lifecycle_state}. Waiting for termination...")
-        time.sleep(10)  # Wait for 10 seconds before checking again
-# Delete the attached volume backups
-for volume_data in restored_volumes:
-    blockstorage_client.delete_volume(volume_data['volume_id'])
+    for vol_backup_id in attached_vol_backup_ocids:
+        blockstorage_client.delete_volume_backup(vol_backup_id)
 
-for vol_backup_id in attached_vol_backup_ocids:
-    blockstorage_client.delete_volume_backup(vol_backup_id)
-
-print("Process completed successfully.")
-current_datetime = datetime.now()
+    print("Process completed successfully.")
+    current_datetime = datetime.now()
