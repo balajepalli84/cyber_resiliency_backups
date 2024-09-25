@@ -1,99 +1,194 @@
-import subprocess
-import os
-import oci
+import oci, sys
+import time
+from datetime import datetime
+import random, string
+import concurrent.futures
 
-# Function to run shell commands and capture output
-def run_command(command):
-    process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    stdout, stderr = process.communicate()
-    
-    if process.returncode != 0:
-        print(f"Error running command: {command}")
-        print(stderr.decode("utf-8"))
-        return None
-    return stdout.decode("utf-8").strip()
+# Initialize the default config
+config = oci.config.from_file()
 
-# Function to get attached block volumes (excluding the root volume)
-def get_attached_volumes():
-    # Using lsblk to get block devices, excluding root
-    command = "lsblk -n -o NAME,TYPE,MOUNTPOINT | grep disk | awk '{print $1}' | grep -v '^├─' | grep -v '^└─'"
-    volumes = run_command(command)
-    if volumes:
-        return volumes.splitlines()
-    return []
+# Initialize OCI clients
+compute_client = oci.core.ComputeClient(config)
+blockstorage_client = oci.core.BlockstorageClient(config)
+object_storage_client = oci.object_storage.ObjectStorageClient(config)
 
-# Function to get filesystem type of a device
-def get_filesystem(device):
-    command = f"blkid /dev/{device} -s TYPE -o value"
-    fs_type = run_command(command)
-    return fs_type if fs_type else None  # return None if blkid fails
+# Parameters - replace these with your specific values
+current_datetime = datetime.now()
+print(f"Starttime is {current_datetime}")
+datetime_string = current_datetime.strftime("%Y-%m-%d-%H-%M-%S")
+compartment_id = "ocid1.compartment.oc1..aaaaaaaafklcekq7wnwrt4zxeizcrmvhltz6wxaqzwksbhbs73yz6mtpi5za"
+instance_id = "ocid1.instance.oc1.iad.anuwcljtc3adhhqcz5dtjvpyfc7fzu34wvoebq56qsnimvfk5hg5z3di473a"
+os_namespace = 'ociateam'
+bucket_name = "cra-backup"
+temp_instance_subnet_ocid = "ocid1.subnet.oc1.iad.aaaaaaaavbogtxo5uxelricigx4jm6nw77xaannxi35v3dpmtorlzzlfjvqq"
+tag_key = 'CRA-Backup'
+tag_value = 'True'
 
-# Function to mount block volume
-def mount_volume(device, mount_point, fs_type):
-    if not os.path.exists(mount_point):
-        os.makedirs(mount_point)
-        print(f"Created mount point: {mount_point}")
-    command = f"mount -t {fs_type} /dev/{device} {mount_point}"
-    result = run_command(command)
-    if result is None:
-        print(f"Failed to mount /dev/{device} to {mount_point}")
-    else:
-        print(f"Mounted /dev/{device} to {mount_point}")
+def list_instances_by_tag(compartment_id, tag_key, tag_value):
+    instances = compute_client.list_instances(compartment_id).data
+    filtered_instances = []
+    for instance in instances:
+        instance_tags = instance.freeform_tags
+        if tag_key in instance_tags and instance_tags[tag_key] == tag_value and instance.lifecycle_state != 'TERMINATED':
+            filtered_instances.append(instance)
 
-# Function to upload file to OCI Object Storage
-def upload_file_to_object_storage(object_storage,namespace, bucket_name, object_name, file_path):
-    namespace_name = namespace
-    bucket_name = bucket_name
-    object_name = object_name
-    file_path = file_path
-    
-    with open(file_path, 'rb') as file:
-        object_storage.put_object(namespace_name, bucket_name, object_name, file)
+    return filtered_instances
 
-# Main function to discover and mount block volumes, then upload files to OCI Object Storage
-def mount_and_upload_volumes():
-    # Get list of attached block volumes
-    volumes = get_attached_volumes()
-    if not volumes:
-        print("No block volumes attached.")
-        return
-    
-    print(f"Found volumes: {volumes}")
-    signer = oci.auth.signers.InstancePrincipalsSecurityTokenSigner()
-    object_storage = oci.object_storage.ObjectStorageClient(config={}, signer=signer)    
-    namespace = object_storage.get_namespace().data  # Get the Object Storage namespace
-    bucket_name = 'meeting_recording'  # Replace with your bucket name   
-    
-    for volume in volumes:
-        # Skip the root volume
-        if volume == "sda":
-            continue
+def process_instance(instance):
+    print(f"Instance Name: {instance.display_name}, OCID: {instance.id}")
+    boot_volume_backup_name = instance.display_name + '_' + datetime_string
+    object_name = "exported_image_" + instance.display_name + '_' + datetime_string
+    custom_image_name = "custom_image_from_volume_" + instance.display_name + '_' + datetime_string
+    restored_volume_name = "restored_volume_" + instance.display_name + '_' + datetime_string
+    temporary_instance_name = 'temporary_instance_' + instance.display_name + '_' + datetime_string
 
-        # Get the filesystem type
-        fs_type = get_filesystem(volume)
-        
-        # Skip unformatted volumes
-        if fs_type is None:
-            print(f"Skipping unformatted volume: {volume}")
-            continue
-        
-        # Define the mount point as /mnt/<volume_name>
-        mount_point = f"/mnt/{volume}"
-        
-        # Mount the volume
-        mount_volume(volume, mount_point, fs_type)
-        print("start here")
-        # Loop over each file in the volume
-        for root, dirs, files in os.walk(mount_point):
-            print(f"Step 2 - {files}")
-            print(f"Step 2.1 - {mount_point}")
-            for file in files:
-                print(f"Step 3.1 - {file}")
-                file_path = os.path.join(root, file)
-                object_name = os.path.relpath(file_path, mount_point)
-                object_name = f"{volume}/{object_name}"
-                print(f"Uploading file: {file_path} to {object_name}")
-                upload_file_to_object_storage(object_storage,namespace, bucket_name, object_name, file_path)
+    # Step 1: Create a Boot Volume Backup
+    availability_domain = instance.availability_domain
+    boot_volume_info = compute_client.list_boot_volume_attachments(availability_domain, instance.compartment_id,
+                                                                   instance_id=instance.id).data
+    boot_volume_id = boot_volume_info[0].boot_volume_id
 
-if __name__ == "__main__":
-    mount_and_upload_volumes()
+    boot_volume_backup_response = blockstorage_client.create_boot_volume_backup(
+        create_boot_volume_backup_details=oci.core.models.CreateBootVolumeBackupDetails(
+            boot_volume_id=boot_volume_id,
+            display_name=boot_volume_backup_name,
+            freeform_tags={
+                'cra_boot_volume_backup': 'True'},
+            type="FULL")).data
+
+    print(f"Creating boot volume backup... Backup OCID: {boot_volume_backup_response.id}")
+    # Wait until the boot volume backup is available
+    while True:
+        backup_status = blockstorage_client.get_boot_volume_backup(boot_volume_backup_response.id).data.lifecycle_state
+        if backup_status == "AVAILABLE":
+            break
+        print("Waiting for boot volume backup to complete...")
+        time.sleep(15)
+
+    print("Boot volume and Attached Volume backup created successfully.")
+
+    # Step 2: Restore the Boot Volume Backup
+    restored_volume = blockstorage_client.create_boot_volume(
+        create_boot_volume_details=oci.core.models.CreateBootVolumeDetails(
+            compartment_id=compartment_id,
+            source_details=oci.core.models.BootVolumeSourceFromBootVolumeReplicaDetails(
+                type="bootVolumeBackup",
+                id=boot_volume_backup_response.id),
+            availability_domain=availability_domain,
+            display_name=restored_volume_name)).data
+    print(f"Restoring volume from backup... Volume OCID: {restored_volume.id}")
+
+    # Wait until the volume is available
+    while True:
+        volume_status = blockstorage_client.get_boot_volume(restored_volume.id).data.lifecycle_state
+        if volume_status == "AVAILABLE":
+            break
+        print("Waiting for volume to become available...")
+        time.sleep(10)
+
+    print("Volume restored successfully.")
+
+    # Step 3: Create a Custom Image from the Restored Volume
+    instance_details = oci.core.models.LaunchInstanceDetails(
+        compartment_id=compartment_id,
+        availability_domain=availability_domain,
+        display_name=temporary_instance_name,
+        shape="VM.Standard.E4.Flex",
+        shape_config=oci.core.models.LaunchInstanceShapeConfigDetails(
+            ocpus=2,
+            memory_in_gbs=10),
+        create_vnic_details=oci.core.models.CreateVnicDetails(
+            assign_public_ip=False,
+            subnet_id=temp_instance_subnet_ocid
+        ),
+        source_details=oci.core.models.InstanceSourceViaBootVolumeDetails(
+            boot_volume_id=restored_volume.id
+        )
+    )
+    instance = compute_client.launch_instance(instance_details).data
+
+    print(f"Launching temporary instance... Instance OCID: {instance.id}")
+
+    # Wait until the instance is running
+    while True:
+        instance_status = compute_client.get_instance(instance.id).data.lifecycle_state
+        if instance_status == "RUNNING":
+            break
+        print("Waiting for instance to become available...")
+        time.sleep(15)
+    print("Instance is running.")
+
+    # Create a custom image from the instance
+    #this is for testing 
+    time.sleep(100)
+
+    image_details = oci.core.models.CreateImageDetails(
+        compartment_id=compartment_id,
+        instance_id=instance.id,
+        display_name=custom_image_name
+    )
+    custom_image = compute_client.create_image(image_details).data
+
+    print(f"Creating custom image... Image OCID: {custom_image.id}")
+
+    # Wait until the image is available
+    while True:
+        image_status = compute_client.get_image(custom_image.id).data.lifecycle_state
+        if image_status == "AVAILABLE":
+            break
+        print("Waiting for custom image to become available...")
+        time.sleep(20)
+
+    print("Custom image created successfully.")
+    time.sleep(60)
+    export_details = compute_client.export_image(
+        image_id=custom_image.id,
+        export_image_details=oci.core.models.ExportImageViaObjectStorageTupleDetails( 
+            destination_type="objectStorageTuple",
+            namespace_name=os_namespace,
+            bucket_name=bucket_name,
+            object_name=object_name
+            #export_format="VHD"
+        )
+    )
+
+    print(f"Exporting image to Object Storage... Bucket: {bucket_name}, Object: {object_name}")
+
+    # Wait for the export to complete (this can take some time depending on the image size)
+    while True:
+        image_export_status = compute_client.get_image(custom_image.id).data.lifecycle_state
+        if image_export_status == "AVAILABLE":
+            break
+        print("Waiting for image export to complete...")
+        time.sleep(30)
+
+    print("Image exported to Object Storage successfully.")
+
+    # Cleanup: Terminate the temporary instance and delete the restored volume
+    compute_client.terminate_instance(instance.id, preserve_boot_volume=False)
+    print(f"Terminating temporary instance... Instance OCID: {instance.id}")
+    # Wait for the instance to be terminated
+    while True:
+        instance = compute_client.get_instance(instance.id).data
+        if instance.lifecycle_state == 'TERMINATED':
+            print("Instance is terminated.")
+            break
+        else:
+            print(f"Current state: {instance.lifecycle_state}. Waiting for termination...")
+            time.sleep(10)  # Wait for 10 seconds before checking again
+
+    blockstorage_client.delete_boot_volume(restored_volume.id)
+    print(f"Deleting restored volume... Volume OCID: {restored_volume.id}")
+
+instances = list_instances_by_tag(compartment_id, tag_key, tag_value)
+
+with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+    futures = []
+    for instance in instances:
+        futures.append(executor.submit(process_instance, instance))
+    for future in concurrent.futures.as_completed(futures):
+        future.result()
+
+print("Process completed successfully.")
+current_datetime = datetime.now()
+print(f"Endtime is {current_datetime}")
