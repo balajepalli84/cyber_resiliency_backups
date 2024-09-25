@@ -1,8 +1,10 @@
-import oci,sys
+import oci, sys
 import time
 from datetime import datetime
 import random, string
 import paramiko
+import concurrent.futures
+
 # Initialize the default config
 config = oci.config.from_file()
 
@@ -35,9 +37,8 @@ def list_instances_by_tag(compartment_id, tag_key, tag_value):
             filtered_instances.append(instance)
     return filtered_instances
 
-instances = list_instances_by_tag(compartment_id, tag_key, tag_value)
-
-for instance in instances:
+# Function to process a single instance
+def process_instance(instance):
     print(f"Processing Instance Name: {instance.display_name}, OCID: {instance.id}")
     availability_domain = instance.availability_domain
     block_volume_info = compute_client.list_volume_attachments(
@@ -112,115 +113,127 @@ for instance in instances:
     print("Volumes restored successfully.")
 
     temporary_instance_name = f'temporary_instance_{instance.display_name}_{datetime_string}'
-
-    instance_details = oci.core.models.LaunchInstanceDetails(
-        compartment_id=compartment_id,
-        availability_domain=availability_domain,
-        display_name=temporary_instance_name,
-        shape="VM.Standard.E4.Flex",
-        shape_config=oci.core.models.LaunchInstanceShapeConfigDetails(
-            ocpus=2,
-            memory_in_gbs=10
-        ),
-        create_vnic_details=oci.core.models.CreateVnicDetails(
-            assign_public_ip=True,
-            subnet_id=temp_instance_subnet_ocid
-        ),
-        source_details=oci.core.models.InstanceSourceViaImageDetails(
-            image_id='ocid1.image.oc1.iad.aaaaaaaa32s2htizwbsi5q2tnbrzii5n67tqmki7en7hkrvxzfww556qggxq'
-        ),
-        metadata={
-            "ssh_authorized_keys": public_key
-        }
-    )
-
-    # Launch the instance
-    new_instance = compute_client.launch_instance(instance_details).data
-
-    print(f"Launching new instance... Instance OCID: {new_instance.id}")
-
-
-    # Wait until the instance is running
-    while True:
-        instance_status = compute_client.get_instance(new_instance.id).data.lifecycle_state
-        if instance_status == "RUNNING":
-            break
-        print("Waiting for instance to become available...")
-        time.sleep(15)
-
-    print("New instance is running.")
-
-    # Step 4: Attach all restored block volumes to the new instance
-    for volume_data in restored_volumes:
-        attach_details = oci.core.models.AttachParavirtualizedVolumeDetails(
-            instance_id=new_instance.id,
-            volume_id=volume_data['volume_id'],
-            display_name=f"{volume_data['instance_name']}_attached_volume_{datetime_string}"
+    if restored_volumes:
+        instance_details = oci.core.models.LaunchInstanceDetails(
+            compartment_id=compartment_id,
+            availability_domain=availability_domain,
+            display_name=temporary_instance_name,
+            shape="VM.Standard.E4.Flex",
+            shape_config=oci.core.models.LaunchInstanceShapeConfigDetails(
+                ocpus=2,
+                memory_in_gbs=10
+            ),
+            create_vnic_details=oci.core.models.CreateVnicDetails(
+                assign_public_ip=True,
+                subnet_id=temp_instance_subnet_ocid
+            ),
+            source_details=oci.core.models.InstanceSourceViaImageDetails(
+                image_id='ocid1.image.oc1.iad.aaaaaaaa32s2htizwbsi5q2tnbrzii5n67tqmki7en7hkrvxzfww556qggxq'
+            ),
+            metadata={
+                "ssh_authorized_keys": public_key
+            }
         )
-        attach_response = compute_client.attach_volume(attach_details).data
-        print(f"Attaching volume {volume_data['volume_id']} from instance {volume_data['instance_name']} to new instance {new_instance.display_name}")
 
-        # Wait for attachment to complete
+        # Launch the instance
+        new_instance = compute_client.launch_instance(instance_details).data
+
+        print(f"Launching new instance... Instance OCID: {new_instance.id}")
+
+
+        # Wait until the instance is running
         while True:
-            attachment_status = compute_client.get_volume_attachment(attach_response.id).data.lifecycle_state
-            if attachment_status == "ATTACHED":
+            instance_status = compute_client.get_instance(new_instance.id).data.lifecycle_state
+            if instance_status == "RUNNING":
                 break
-            print(f"Waiting for volume {volume_data['volume_id']} to attach...")
-            time.sleep(10)
+            print("Waiting for instance to become available...")
+            time.sleep(15)
 
-        print(f"Volume {volume_data['volume_id']} attached successfully.")
+        print("New instance is running.")
 
-    print("All volumes attached to the new instance.")
+        # Step 4: Attach all restored block volumes to the new instance
+        for volume_data in restored_volumes:
+            attach_details = oci.core.models.AttachParavirtualizedVolumeDetails(
+                instance_id=new_instance.id,
+                volume_id=volume_data['volume_id'],
+                display_name=f"{volume_data['instance_name']}_attached_volume_{datetime_string}"
+            )
+            attach_response = compute_client.attach_volume(attach_details).data
+            print(f"Attaching volume {volume_data['volume_id']} from instance {volume_data['instance_name']} to new instance {new_instance.display_name}")
 
-    list_vnic_attachments_response = compute_client.list_vnic_attachments(
-        compartment_id=compartment_id,
-        instance_id=new_instance.id).data
-    response_get_vnic = network_client.get_vnic(list_vnic_attachments_response[0].vnic_id).data
-    instance_status = compute_client.get_instance(new_instance.id).data.lifecycle_state
-    time.sleep(30)
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            # Wait for attachment to complete
+            while True:
+                attachment_status = compute_client.get_volume_attachment(attach_response.id).data.lifecycle_state
+                if attachment_status == "ATTACHED":
+                    break
+                print(f"Waiting for volume {volume_data['volume_id']} to attach...")
+                time.sleep(10)
 
-    private_key = paramiko.RSAKey.from_private_key_file(private_key_path)
-    ssh.connect(response_get_vnic.public_ip, username='opc', pkey=private_key)
+            print(f"Volume {volume_data['volume_id']} attached successfully.")
 
-    stdin, stdout1, stderr1 = ssh.exec_command(f"sudo curl '{oci_objectstorage_preauthrequest}' > /home/opc/backup_script.py")
-    output1 = stdout1.read().decode()
-    error1 = stderr1.read().decode()
-    print("Command 1 Output:")
-    print(output1)
-    if error1:
-        print("Command 1 Error:")
-        print(error1)
+        print("All volumes attached to the new instance.")
 
-    # Command 2: Run script
-    stdin, stdout2, stderr2 = ssh.exec_command(f"sudo python /home/opc/backup_script.py {bucket_name} {instance.display_name}_{datetime_string}")
-    output2 = stdout2.read().decode()
-    error2 = stderr2.read().decode()
-    print("Command 2 Output:")
-    print(output2)
-    if error2:
-        print("Command 2 Error:")
-        print(error2)
+        list_vnic_attachments_response = compute_client.list_vnic_attachments(
+            compartment_id=compartment_id,
+            instance_id=new_instance.id).data
+        response_get_vnic = network_client.get_vnic(list_vnic_attachments_response[0].vnic_id).data
+        instance_status = compute_client.get_instance(new_instance.id).data.lifecycle_state
+        time.sleep(30)
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-    ssh.close()
-    # Cleanup: Terminate the temporary instance and delete the restored volume
-    compute_client.terminate_instance(new_instance.id, preserve_boot_volume=False)
-    print(f"Terminating temporary instance... Instance OCID: {new_instance.id}")
-    while True:
-        instance = compute_client.get_instance(new_instance.id).data
-        if instance.lifecycle_state == 'TERMINATED':
-            print("Instance is terminated.")
-            break
-        else:
-            print(f"Current state: {instance.lifecycle_state}. Waiting for termination...")
-            time.sleep(10)  # Wait for 10 seconds before checking again
-    # Delete the attached volume backups
-    for volume_data in restored_volumes:
-        blockstorage_client.delete_volume(volume_data['volume_id'])
-    print("Restored volumes are terminated.")
-    for vol_backup_id in attached_vol_backup_ocids:
-        blockstorage_client.delete_volume_backup(vol_backup_id)
-    print("Volume backups are terminated.")
-print("Process completed successfully.")
-current_datetime = datetime.now()
+        private_key = paramiko.RSAKey.from_private_key_file(private_key_path)
+        ssh.connect(response_get_vnic.public_ip, username='opc', pkey=private_key)
+        stdin, stdout1, stderr1 = ssh.exec_command(f"sudo curl '{oci_objectstorage_preauthrequest}' > /home/opc/backup_script.py")
+        output1 = stdout1.read().decode()
+        error1 = stderr1.read().decode()
+        print("Command 1 Output:")
+        print(output1)
+        if error1:
+            print("Command 1 Error:")
+            print(error1)
+
+        # Command 2: Run script
+        stdin, stdout2, stderr2 = ssh.exec_command(f"sudo python /home/opc/backup_script.py {bucket_name} {instance.display_name}_{datetime_string}")
+        output2 = stdout2.read().decode()
+        error2 = stderr2.read().decode()
+        print("Command 2 Output:")
+        print(output2)
+        if error2:
+            print("Command 2 Error:")
+            print(error2)
+
+        ssh.close()
+        # Cleanup: Terminate the temporary instance and delete the restored volume
+        compute_client.terminate_instance(new_instance.id, preserve_boot_volume=False)
+        print(f"Terminating temporary instance... Instance OCID: {new_instance.id}")
+        while True:
+            instance = compute_client.get_instance(new_instance.id).data
+            if instance.lifecycle_state == 'TERMINATED':
+                print("Instance is terminated.")
+                break
+            else:
+                print(f"Current state: {instance.lifecycle_state}. Waiting for termination...")
+                time.sleep(10)  # Wait for 10 seconds before checking again
+        # Delete the attached volume backups
+        for volume_data in restored_volumes:
+            blockstorage_client.delete_volume(volume_data['volume_id'])
+        print("Restored volumes are terminated.")
+        for vol_backup_id in attached_vol_backup_ocids:
+            blockstorage_client.delete_volume_backup(vol_backup_id)
+        print("Volume backups are terminated.")
+
+def main():
+    instances = list_instances_by_tag(compartment_id, tag_key, tag_value)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        futures = []
+        for instance in instances:
+            futures.append(executor.submit(process_instance, instance))
+        for future in concurrent.futures.as_completed(futures):
+            future.result()
+
+if __name__ == "__main__":
+    main()
+    print("Process completed successfully.")
+    current_datetime = datetime.now()
+    print(f"End time is {current_datetime}")
