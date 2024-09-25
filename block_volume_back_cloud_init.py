@@ -2,7 +2,7 @@ import oci,sys
 import time
 from datetime import datetime
 import random, string
-import paramiko,base64,sys
+import paramiko
 # Initialize the default config
 config = oci.config.from_file()
 
