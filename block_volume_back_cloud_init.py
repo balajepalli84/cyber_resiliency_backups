@@ -1,9 +1,13 @@
-import oci, sys
+import oci, logging
 import time
 from datetime import datetime
 import random, string
 import paramiko
 import concurrent.futures
+
+# Set up logging
+logging.basicConfig(filename=r'C:\Security\CRA\mycode\logs\log_file.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger()
 
 # Initialize the default config
 config = oci.config.from_file()
@@ -16,6 +20,7 @@ network_client = oci.core.VirtualNetworkClient(config)
 
 current_datetime = datetime.now()
 print(f"Starttime is {current_datetime}")
+logger.info(f"Starttime is {current_datetime}")
 datetime_string = current_datetime.strftime("%Y-%m-%d-%H-%M-%S")
 compartment_id = "ocid1.compartment.oc1..aaaaaaaafklcekq7wnwrt4zxeizcrmvhltz6wxaqzwksbhbs73yz6mtpi5za"
 os_namespace = 'ociateam'
@@ -39,7 +44,7 @@ def list_instances_by_tag(compartment_id, tag_key, tag_value):
 
 # Function to process a single instance
 def process_instance(instance):
-    print(f"Processing Instance Name: {instance.display_name}, OCID: {instance.id}")
+    logger.info(f"Processing Instance Name: {instance.display_name}, OCID: {instance.id}")
     availability_domain = instance.availability_domain
     block_volume_info = compute_client.list_volume_attachments(
         availability_domain=availability_domain, 
@@ -76,6 +81,7 @@ def process_instance(instance):
         time.sleep(15)
 
     print("Attached volume backups created successfully.")
+    logger.info(f"Attached volume backups created successfully. {volume_backup_response.id}")
 
     # Step 2: Restore Block Volumes from Backups
     restored_volumes = []
@@ -98,6 +104,7 @@ def process_instance(instance):
             'availability_domain': availability_domain
         })
         print(f"Restoring block volume from backup... Volume OCID: {restored_block_volume.id}")
+        logger.info(f"Restoring block volume from backup... Volume OCID: {restored_block_volume.id}")
 
     # Wait until the volumes are available
     while True:
@@ -108,6 +115,7 @@ def process_instance(instance):
         if all(status == "AVAILABLE" for status in block_volume_statuses):
             break
         print("Waiting for restored block volumes to become available...")
+        
         time.sleep(10)
 
     print("Volumes restored successfully.")
@@ -139,6 +147,7 @@ def process_instance(instance):
         new_instance = compute_client.launch_instance(instance_details).data
 
         print(f"Launching new instance... Instance OCID: {new_instance.id}")
+        logger.info(f"Launching new instance... Instance OCID: {new_instance.id}")
 
 
         # Wait until the instance is running
@@ -146,10 +155,11 @@ def process_instance(instance):
             instance_status = compute_client.get_instance(new_instance.id).data.lifecycle_state
             if instance_status == "RUNNING":
                 break
-            print("Waiting for instance to become available...")
+            print("Waiting for instance to become available...")            
             time.sleep(15)
 
         print("New instance is running.")
+        logger.info(f"New instance: {new_instance.display_name}, OCID: {new_instance.id}")
 
         # Step 4: Attach all restored block volumes to the new instance
         for volume_data in restored_volumes:
@@ -160,7 +170,7 @@ def process_instance(instance):
             )
             attach_response = compute_client.attach_volume(attach_details).data
             print(f"Attaching volume {volume_data['volume_id']} from instance {volume_data['instance_name']} to new instance {new_instance.display_name}")
-
+            logger.info(f"Attaching volume {volume_data['volume_id']} from instance {volume_data['instance_name']} to new instance {new_instance.display_name}")
             # Wait for attachment to complete
             while True:
                 attachment_status = compute_client.get_volume_attachment(attach_response.id).data.lifecycle_state
@@ -170,6 +180,7 @@ def process_instance(instance):
                 time.sleep(10)
 
             print(f"Volume {volume_data['volume_id']} attached successfully.")
+            logger.info(f"Volume {volume_data['volume_id']} attached successfully.")
 
         print("All volumes attached to the new instance.")
 
@@ -187,33 +198,40 @@ def process_instance(instance):
         stdin, stdout1, stderr1 = ssh.exec_command(f"sudo curl '{oci_objectstorage_preauthrequest}' > /home/opc/backup_script.py")
         output1 = stdout1.read().decode()
         error1 = stderr1.read().decode()
-        print("Command 1 Output:")
+        logger.info(f"SSH output {new_instance.display_name}, {output1}")
+        logger.info(f"SSH error1 {new_instance.display_name}, {error1}")
         print(output1)
         if error1:
             print("Command 1 Error:")
             print(error1)
+            logger.info(f"Processing Instance Name: {instance.display_name}, OCID: {instance.id}")
 
         # Command 2: Run script
         stdin, stdout2, stderr2 = ssh.exec_command(f"sudo python /home/opc/backup_script.py {bucket_name} {instance.display_name}_{datetime_string}")
         output2 = stdout2.read().decode()
         error2 = stderr2.read().decode()
+        logger.info(f"SSH output - backupscript {new_instance.display_name}, {output2}")
+        logger.info(f"SSH error2 {new_instance.display_name}, {error2}")        
         print("Command 2 Output:")
+        logger.info(f"Processing Instance Name: {instance.display_name}, OCID: {instance.id}")
         print(output2)
         if error2:
             print("Command 2 Error:")
             print(error2)
+            logger.info(f"Processing Instance Name: {instance.display_name}, OCID: {instance.id}")
 
         ssh.close()
         # Cleanup: Terminate the temporary instance and delete the restored volume
         compute_client.terminate_instance(new_instance.id, preserve_boot_volume=False)
         print(f"Terminating temporary instance... Instance OCID: {new_instance.id}")
+        logger.info(f"Terminating temporary instance... Instance OCID: {new_instance.id}")
         while True:
             instance = compute_client.get_instance(new_instance.id).data
             if instance.lifecycle_state == 'TERMINATED':
                 print("Instance is terminated.")
                 break
             else:
-                print(f"Current state: {instance.lifecycle_state}. Waiting for termination...")
+                logger.info(f"Processing Instance Name: {instance.display_name}, OCID: {instance.id}")
                 time.sleep(10)  # Wait for 10 seconds before checking again
         # Delete the attached volume backups
         for volume_data in restored_volumes:
@@ -234,6 +252,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-    print("Process completed successfully.")
+    logger.info("Process completed successfully.")
     current_datetime = datetime.now()
-    print(f"End time is {current_datetime}")
+    logger.info(f"End time is {current_datetime}")
