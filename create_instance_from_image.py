@@ -45,19 +45,21 @@ while True:
 print("Image imported successfully.")
 
 # Step 2: Launch a New Instance using the Imported Image
-launch_instance_details = oci.core.models.LaunchInstanceDetails(
-    compartment_id=compartment_id,
+
+launch_instance_details=oci.core.models.LaunchInstanceDetails(
     availability_domain=availability_domain,
-    display_name=instance_display_name,
-    shape="VM.Standard2.1", 
+    compartment_id=compartment_id,
     create_vnic_details=oci.core.models.CreateVnicDetails(
-        assign_public_ip=True,
-        subnet_id=subnet_id
-    ),
+        assign_public_ip=False,
+        subnet_id=subnet_id),
+    display_name=instance_display_name,
+    shape="VM.Standard.E4.Flex",
+    shape_config=oci.core.models.LaunchInstanceShapeConfigDetails(
+        ocpus=12,
+        memory_in_gbs=250),
     source_details=oci.core.models.InstanceSourceViaImageDetails(
         image_id=imported_image.id
-    )
-)
+    ))
 
 new_instance = compute_client.launch_instance(launch_instance_details).data
 

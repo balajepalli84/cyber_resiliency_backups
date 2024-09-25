@@ -8,43 +8,6 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 
-# Function to generate SSH key pair
-def generate_ssh_key_pair():
-    private_key = rsa.generate_private_key(
-        public_exponent=65537,
-        key_size=2048,
-        backend=default_backend()
-    )
-
-    key_dir = r'C:\Security\CRA\mycode\creds'
-    os.makedirs(key_dir, exist_ok=True)
-
-    private_key_path = os.path.join(key_dir, 'id_rsa')
-    public_key_path = os.path.join(key_dir, 'id_rsa.pub')
-
-    with open(private_key_path, "wb") as private_key_file:
-        private_key_file.write(
-            private_key.private_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PrivateFormat.TraditionalOpenSSL,
-                encryption_algorithm=serialization.NoEncryption()
-            )
-        )
-
-    public_key = private_key.public_key()
-    with open(public_key_path, "wb") as public_key_file:
-        public_key_file.write(
-            public_key.public_bytes(
-                encoding=serialization.Encoding.OpenSSH,
-                format=serialization.PublicFormat.OpenSSH
-            )
-        )
-
-    return private_key_path, public_key_path
-
-# Generate SSH key pair and store them on command server (where code is running). You will need these cred's when zipping block volumes
-private_key_path, public_key_path = generate_ssh_key_pair()
-
 # Initialize the default config
 config = oci.config.from_file()
 
@@ -64,6 +27,8 @@ bucket_name = "cra-backup"
 temp_instance_subnet_ocid = "ocid1.subnet.oc1.iad.aaaaaaaavbogtxo5uxelricigx4jm6nw77xaannxi35v3dpmtorlzzlfjvqq"
 tag_key = 'CRA-Backup'
 tag_value = 'True'
+
+public_key = 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDlJruyiWi7+sDGmKvYR0i1Oj9Eean6F5ypQ6JIChYodTrQoOZ7f5fNZT2KIBikGBaL8H6IH5UFtsi6tfEfGDgXfsqO1ArSdND0TdRQnamCGROslzSiD7dKYXPUwG4a9Y3mhVcHpIJdG0ejQZbmlKtipNd0D3DS4nTFGOZsI0P2w1EUy5PKqzc//eNUGwJGFBKioDTt5d7PBDWMqOUeON6g7DsXvlhrqj8LfdL+C4EpN1A22qmaA2dLJdOTAwv5M0itQYk5PUZq+tIKCCMOv5R7E8SLQ3PUPqE1KED+pywchfSC28r+xxiQqFseQUfexK+e5wQaJOx7tTdFkPmFcTJj ssh-key-2024-09-19'  
 
 def zip_and_upload_block_volumes(instance_id, restored_block_volumes, instance_ip, username, ssh_key_path):
     # Initialize SSH connection
@@ -121,6 +86,8 @@ def list_instances_by_tag(compartment_id, tag_key, tag_value):
     return filtered_instances
 
 instances = list_instances_by_tag(compartment_id, tag_key, tag_value)
+
+# Generate SSH key pair and store them on command server (where code is running). You will need these cred's when zipping block volumes
 
 for instance in instances:
     print(f"Instance Name: {instance.display_name}, OCID: {instance.id}")
@@ -204,8 +171,7 @@ for instance in instances:
         ).data
         restored_block_volumes.append(restored_block_volume)
         print(f"Restoring block volume from backup... Volume OCID: {restored_block_volume.id}")
-    print(restored_block_volumes)
-    sys.exit()
+
     # Wait until the volumes are available
     while True:
         boot_volume_status = blockstorage_client.get_boot_volume(restored_boot_volume.id).data.lifecycle_state
@@ -227,8 +193,8 @@ for instance in instances:
         display_name=temporary_instance_name,
         shape="VM.Standard.E4.Flex",
         shape_config=oci.core.models.LaunchInstanceShapeConfigDetails(
-            ocpus=12,
-            memory_in_gbs=250
+            ocpus=2,
+            memory_in_gbs=10
         ),
         create_vnic_details=oci.core.models.CreateVnicDetails(
             assign_public_ip=True,
@@ -238,8 +204,9 @@ for instance in instances:
             boot_volume_id=restored_boot_volume.id
         ),
         metadata={
-            "ssh_authorized_keys": open(public_key_path).read()  # Include the public key
-        }
+            "ssh_authorized_keys": public_key
+        },
+        launch_mode="LAUNCH_MODE_CREATE_STOPPED"
     )
     instance = compute_client.launch_instance(instance_details).data
     print(f"Launching temporary instance... Instance OCID: {instance.id}")
