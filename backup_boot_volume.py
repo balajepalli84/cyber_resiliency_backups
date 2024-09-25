@@ -1,21 +1,45 @@
-import oci, sys
+import oci
+import os
 import time
+import logging
 from datetime import datetime
-import random, string
 import concurrent.futures
 
-# Initialize the default config
+current_datetime = datetime.now()
+datetime_string = current_datetime.strftime("%Y-%m-%d-%H-%M-%S")
+# Set up logging
+log_dir = r'C:\Security\CRA\mycode\logs'
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir)  
+log_file = os.path.join(log_dir, f'boot_vol_backup_log_file_{datetime_string}.log')
+logger = logging.getLogger()  
+logger.setLevel(logging.DEBUG)  
+file_handler = logging.FileHandler(log_file)
+file_handler.setLevel(logging.DEBUG)  
+
+# Create console handler for printing logs to the console
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)  
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(formatter)
+console_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
+
 config = oci.config.from_file()
 
 # Initialize OCI clients
-compute_client = oci.core.ComputeClient(config)
-blockstorage_client = oci.core.BlockstorageClient(config)
-object_storage_client = oci.object_storage.ObjectStorageClient(config)
+try:
+    compute_client = oci.core.ComputeClient(config)
+    blockstorage_client = oci.core.BlockstorageClient(config)
+    object_storage_client = oci.object_storage.ObjectStorageClient(config)
+    logger.info("OCI clients initialized successfully.")
+except Exception as e:
+    logger.error(f"Failed to initialize OCI clients: {str(e)}")
+    raise
 
-# Parameters - replace these with your specific values
-current_datetime = datetime.now()
-print(f"Starttime is {current_datetime}")
-datetime_string = current_datetime.strftime("%Y-%m-%d-%H-%M-%S")
+# Parameters
+
 compartment_id = "ocid1.compartment.oc1..aaaaaaaafklcekq7wnwrt4zxeizcrmvhltz6wxaqzwksbhbs73yz6mtpi5za"
 instance_id = "ocid1.instance.oc1.iad.anuwcljtc3adhhqcz5dtjvpyfc7fzu34wvoebq56qsnimvfk5hg5z3di473a"
 os_namespace = 'ociateam'
@@ -25,170 +49,169 @@ tag_key = 'CRA-Backup'
 tag_value = 'True'
 
 def list_instances_by_tag(compartment_id, tag_key, tag_value):
-    instances = compute_client.list_instances(compartment_id).data
-    filtered_instances = []
-    for instance in instances:
-        instance_tags = instance.freeform_tags
-        if tag_key in instance_tags and instance_tags[tag_key] == tag_value and instance.lifecycle_state != 'TERMINATED':
-            filtered_instances.append(instance)
-
-    return filtered_instances
+    try:
+        instances = compute_client.list_instances(compartment_id).data
+        filtered_instances = [instance for instance in instances 
+                              if tag_key in instance.freeform_tags and 
+                              instance.freeform_tags[tag_key] == tag_value and 
+                              instance.lifecycle_state != 'TERMINATED']
+        logger.info(f"Found {len(filtered_instances)} instances with tag {tag_key}: {tag_value}")
+        return filtered_instances
+    except Exception as e:
+        logger.error(f"Error listing instances by tag: {str(e)}")
+        raise
 
 def process_instance(instance):
-    print(f"Instance Name: {instance.display_name}, OCID: {instance.id}")
-    boot_volume_backup_name = instance.display_name + '_' + datetime_string
-    object_name = "exported_image_" + instance.display_name + '_' + datetime_string
-    custom_image_name = "custom_image_from_volume_" + instance.display_name + '_' + datetime_string
-    restored_volume_name = "restored_volume_" + instance.display_name + '_' + datetime_string
-    temporary_instance_name = 'temporary_instance_' + instance.display_name + '_' + datetime_string
+    try:
+        logger.info(f"Processing instance {instance.display_name} (OCID: {instance.id})")        
+        boot_volume_backup_name = instance.display_name + '_' + datetime_string
+        object_name = "exported_image_" + instance.display_name + '_' + datetime_string
+        custom_image_name = "custom_image_from_volume_" + instance.display_name + '_' + datetime_string
+        restored_volume_name = "restored_volume_" + instance.display_name + '_' + datetime_string
+        temporary_instance_name = 'temporary_instance_' + instance.display_name + '_' + datetime_string
 
-    # Step 1: Create a Boot Volume Backup
-    availability_domain = instance.availability_domain
-    boot_volume_info = compute_client.list_boot_volume_attachments(availability_domain, instance.compartment_id,
-                                                                   instance_id=instance.id).data
-    boot_volume_id = boot_volume_info[0].boot_volume_id
+        # Step 1: Create a Boot Volume Backup
+        availability_domain = instance.availability_domain
+        boot_volume_info = compute_client.list_boot_volume_attachments(
+            availability_domain, instance.compartment_id, instance_id=instance.id).data
+        boot_volume_id = boot_volume_info[0].boot_volume_id
 
-    boot_volume_backup_response = blockstorage_client.create_boot_volume_backup(
-        create_boot_volume_backup_details=oci.core.models.CreateBootVolumeBackupDetails(
-            boot_volume_id=boot_volume_id,
-            display_name=boot_volume_backup_name,
-            freeform_tags={
-                'cra_boot_volume_backup': 'True'},
-            type="FULL")).data
+        boot_volume_backup_response = blockstorage_client.create_boot_volume_backup(
+            create_boot_volume_backup_details=oci.core.models.CreateBootVolumeBackupDetails(
+                boot_volume_id=boot_volume_id,
+                display_name=boot_volume_backup_name,
+                freeform_tags={'cra_boot_volume_backup': 'True'},
+                type="FULL")).data
 
-    print(f"Creating boot volume backup... Backup OCID: {boot_volume_backup_response.id}")
-    # Wait until the boot volume backup is available
-    while True:
-        backup_status = blockstorage_client.get_boot_volume_backup(boot_volume_backup_response.id).data.lifecycle_state
-        if backup_status == "AVAILABLE":
-            break
-        print("Waiting for boot volume backup to complete...")
-        time.sleep(15)
+        logger.info(f"Boot volume backup created. Backup OCID: {boot_volume_backup_response.id}")
 
-    print("Boot volume and Attached Volume backup created successfully.")
+        # Wait for backup to complete
+        while True:
+            backup_status = blockstorage_client.get_boot_volume_backup(boot_volume_backup_response.id).data.lifecycle_state
+            logger.info(f"Waiting for Boot volume backup to become available...{boot_volume_backup_name}")
+            if backup_status == "AVAILABLE":
+                break
+            time.sleep(15)
 
-    # Step 2: Restore the Boot Volume Backup
-    restored_volume = blockstorage_client.create_boot_volume(
-        create_boot_volume_details=oci.core.models.CreateBootVolumeDetails(
+        logger.info(f"Boot volume backup completed successfully.{boot_volume_backup_name},{boot_volume_backup_response.id}")
+
+        # Step 2: Restore the Boot Volume Backup
+        restored_volume = blockstorage_client.create_boot_volume(
+            create_boot_volume_details=oci.core.models.CreateBootVolumeDetails(
+                compartment_id=compartment_id,
+                source_details=oci.core.models.BootVolumeSourceFromBootVolumeReplicaDetails(
+                    type="bootVolumeBackup",
+                    id=boot_volume_backup_response.id),
+                availability_domain=availability_domain,
+                display_name=restored_volume_name)).data
+
+        logger.info(f"Restored volume from backup. Volume OCID: {restored_volume_name},{restored_volume.id}")
+
+        while True:
+            volume_status = blockstorage_client.get_boot_volume(restored_volume.id).data.lifecycle_state
+            if volume_status == "AVAILABLE":
+                break
+            logger.info(f"Waiting for volume to become available...{restored_volume_name}")
+            time.sleep(10)
+
+        logger.info(f"Volume restored successfully.{restored_volume_name}")
+
+        # Step 3: Launch temporary instance and create custom image
+        instance_details = oci.core.models.LaunchInstanceDetails(
             compartment_id=compartment_id,
-            source_details=oci.core.models.BootVolumeSourceFromBootVolumeReplicaDetails(
-                type="bootVolumeBackup",
-                id=boot_volume_backup_response.id),
             availability_domain=availability_domain,
-            display_name=restored_volume_name)).data
-    print(f"Restoring volume from backup... Volume OCID: {restored_volume.id}")
-
-    # Wait until the volume is available
-    while True:
-        volume_status = blockstorage_client.get_boot_volume(restored_volume.id).data.lifecycle_state
-        if volume_status == "AVAILABLE":
-            break
-        print("Waiting for volume to become available...")
-        time.sleep(10)
-
-    print("Volume restored successfully.")
-
-    # Step 3: Create a Custom Image from the Restored Volume
-    instance_details = oci.core.models.LaunchInstanceDetails(
-        compartment_id=compartment_id,
-        availability_domain=availability_domain,
-        display_name=temporary_instance_name,
-        shape="VM.Standard.E4.Flex",
-        shape_config=oci.core.models.LaunchInstanceShapeConfigDetails(
-            ocpus=2,
-            memory_in_gbs=10),
-        create_vnic_details=oci.core.models.CreateVnicDetails(
-            assign_public_ip=False,
-            subnet_id=temp_instance_subnet_ocid
-        ),
-        source_details=oci.core.models.InstanceSourceViaBootVolumeDetails(
-            boot_volume_id=restored_volume.id
+            display_name=temporary_instance_name,
+            shape="VM.Standard.E4.Flex",
+            shape_config=oci.core.models.LaunchInstanceShapeConfigDetails(
+                ocpus=2, memory_in_gbs=10),
+            create_vnic_details=oci.core.models.CreateVnicDetails(
+                assign_public_ip=False,
+                subnet_id=temp_instance_subnet_ocid),
+            source_details=oci.core.models.InstanceSourceViaBootVolumeDetails(
+                boot_volume_id=restored_volume.id)
         )
-    )
-    instance = compute_client.launch_instance(instance_details).data
+        temp_instance = compute_client.launch_instance(instance_details).data
 
-    print(f"Launching temporary instance... Instance OCID: {instance.id}")
+        logger.info(f"Temporary instance launched. Instance OCID: {temporary_instance_name},{temp_instance.id}")
 
-    # Wait until the instance is running
-    while True:
-        instance_status = compute_client.get_instance(instance.id).data.lifecycle_state
-        if instance_status == "RUNNING":
-            break
-        print("Waiting for instance to become available...")
-        time.sleep(15)
-    print("Instance is running.")
+        while True:
+            instance_status = compute_client.get_instance(temp_instance.id).data.lifecycle_state
+            if instance_status == "RUNNING":
+                break
+            logger.info(f"Waiting for instance to become available...{temporary_instance_name}")
+            time.sleep(15)
 
-    # Create a custom image from the instance
-    #this is for testing 
-    time.sleep(100)
+        logger.info(f"Temporary instance {temporary_instance_name} is running.")
 
-    image_details = oci.core.models.CreateImageDetails(
-        compartment_id=compartment_id,
-        instance_id=instance.id,
-        display_name=custom_image_name
-    )
-    custom_image = compute_client.create_image(image_details).data
-
-    print(f"Creating custom image... Image OCID: {custom_image.id}")
-
-    # Wait until the image is available
-    while True:
-        image_status = compute_client.get_image(custom_image.id).data.lifecycle_state
-        if image_status == "AVAILABLE":
-            break
-        print("Waiting for custom image to become available...")
-        time.sleep(20)
-
-    print("Custom image created successfully.")
-    time.sleep(60)
-    export_details = compute_client.export_image(
-        image_id=custom_image.id,
-        export_image_details=oci.core.models.ExportImageViaObjectStorageTupleDetails( 
-            destination_type="objectStorageTuple",
-            namespace_name=os_namespace,
-            bucket_name=bucket_name,
-            object_name=object_name
-            #export_format="VHD"
+        # Step 4: Create a custom image from the instance
+        image_details = oci.core.models.CreateImageDetails(
+            compartment_id=compartment_id,
+            instance_id=temp_instance.id,
+            display_name=custom_image_name
         )
-    )
+        custom_image = compute_client.create_image(image_details).data
 
-    print(f"Exporting image to Object Storage... Bucket: {bucket_name}, Object: {object_name}")
+        logger.info(f"Custom image - {custom_image_name} created. Image OCID: {custom_image.id}")
 
-    # Wait for the export to complete (this can take some time depending on the image size)
-    while True:
-        image_export_status = compute_client.get_image(custom_image.id).data.lifecycle_state
-        if image_export_status == "AVAILABLE":
-            break
-        print("Waiting for image export to complete...")
-        time.sleep(30)
+        while True:
+            image_status = compute_client.get_image(custom_image.id).data.lifecycle_state
+            if image_status == "AVAILABLE":
+                break
+            logger.info(f"Waiting for custom image - {custom_image_name} to become available...")
+            time.sleep(20)
 
-    print("Image exported to Object Storage successfully.")
+        logger.info(f"Custom image - {custom_image_name} created successfully.")
 
-    # Cleanup: Terminate the temporary instance and delete the restored volume
-    compute_client.terminate_instance(instance.id, preserve_boot_volume=False)
-    print(f"Terminating temporary instance... Instance OCID: {instance.id}")
-    # Wait for the instance to be terminated
-    while True:
-        instance = compute_client.get_instance(instance.id).data
-        if instance.lifecycle_state == 'TERMINATED':
-            print("Instance is terminated.")
-            break
-        else:
-            print(f"Current state: {instance.lifecycle_state}. Waiting for termination...")
-            time.sleep(10)  # Wait for 10 seconds before checking again
+        # Step 5: Export the custom image to Object Storage
+        export_details = compute_client.export_image(
+            image_id=custom_image.id,
+            export_image_details=oci.core.models.ExportImageViaObjectStorageTupleDetails(
+                destination_type="objectStorageTuple",
+                namespace_name=os_namespace,
+                bucket_name=bucket_name,
+                object_name=object_name
+            )
+        )
+        logger.info(f"Exporting image to Object Storage... Bucket: {bucket_name}, Object: {object_name}")
 
-    blockstorage_client.delete_boot_volume(restored_volume.id)
-    print(f"Deleting restored volume... Volume OCID: {restored_volume.id}")
+        while True:
+            image_export_status = compute_client.get_image(custom_image.id).data.lifecycle_state
+            if image_export_status == "AVAILABLE":
+                break
+            logger.info(f"Waiting for image - {object_name} export to complete...")
+            time.sleep(30)
 
-instances = list_instances_by_tag(compartment_id, tag_key, tag_value)
+        logger.info("Image - {object_name} exported to Object Storage successfully.")
 
-with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-    futures = []
-    for instance in instances:
-        futures.append(executor.submit(process_instance, instance))
-    for future in concurrent.futures.as_completed(futures):
-        future.result()
+        # Cleanup: Terminate the temporary instance and delete the restored volume
+        compute_client.terminate_instance(temp_instance.id, preserve_boot_volume=False)
+        logger.info(f"Terminating temporary instance... Instance OCID: {temp_instance.id}")
 
-print("Process completed successfully.")
-current_datetime = datetime.now()
-print(f"Endtime is {current_datetime}")
+        while True:
+            instance = compute_client.get_instance(temp_instance.id).data
+            if instance.lifecycle_state == 'TERMINATED':
+                logger.info(f"Temporary instance {temporary_instance_name} terminated.")
+                break
+            logger.info(f"Current state: {instance.lifecycle_state}. Waiting for termination...")
+            time.sleep(10)
+
+        blockstorage_client.delete_boot_volume(restored_volume.id)
+        logger.info(f"Deleted restored volume. Volume OCID: {restored_volume.id}")
+
+    except Exception as e:
+        logger.error(f"Error processing instance {instance.display_name}: {str(e)}")
+        raise
+
+if __name__ == "__main__":
+    try:
+        instances = list_instances_by_tag(compartment_id, tag_key, tag_value)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(process_instance, instance) for instance in instances]
+            for future in concurrent.futures.as_completed(futures):
+                future.result()
+
+        logger.info("Process completed successfully.")
+    except Exception as e:
+        logger.error(f"Error in main processing: {str(e)}")
+        raise
