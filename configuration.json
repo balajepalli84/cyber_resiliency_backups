@@ -23,8 +23,8 @@
         "filestodownload": ""
     },
     "logging": {
-        "loggroupocid": "ocid1.loggroup.oc1.iad.amaaaaaalh52ctiarbcd7xwd7g5ofa3n572iaec3nsq7guwv5egb752hyiaa",
-        "logocid": "ocid1.log.oc1.iad.amaaaaaalh52ctiaiyzmgx5umn4bg75x2rx2dcak2ifuq64qdbpuylyw263q"
+        "loggroupocid": "ocid1.loggroup.oc1.iad.amaaaaaac3adhhqabrrwbkkdksuhmyqrcnmfiwrbodrjs4t4u2ci5dvbbtza",
+        "logocid": "ocid1.log.oc1.iad.amaaaaaac3adhhqabs7cmkbsaoon373n3zax7c7i7yojtrh2b6452jzxaxkq"
     },
     "notificationinfo": {
         "topicocid": "ocid1.onstopic.oc1.iad.amaaaaaalh52ctia46pgob7yrtnw74wybuswhpr3kbrgn42mwzkvbjtq7duq"
