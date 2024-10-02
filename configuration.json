@@ -1,0 +1,59 @@
+{
+    "craserverinfo": {
+        "name": "cra_orchestration_server",
+        "ocid": "ocid1.instance.oc1.iad.anuwcljtc3adhhqczewcudqk4fflmgjdqmhe7qhxrnfknmosqjc4lrgdvl3q"
+    },
+    "compartmentinfo": {
+        "parentocid": "ocid1.compartment.oc1..aaaaaaaafklcekq7wnwrt4zxeizcrmvhltz6wxaqzwksbhbs73yz6mtpi5za",
+        "vaultocid": "ocid1.compartment.oc1..",
+        "cleanroomocid": "ocid1.compartment.oc1..",
+        "appsocids": "ocid1.compartment.oc1.."
+    },
+    "cratagginginfo": {
+        "namespace": "crabackup",
+        "backupenabledtagname": "enabled",
+        "backupscheduletagname": "schedule",
+        "backupgrouptagname": "backupset"
+    },
+    "objectstorageinfo": {
+        "namespace": "ociateam",
+        "immutablebucketname": "cra-backup",
+        "scriptsbucketname": "bakcup-vault-secrets",
+        "scriptsbucketpar": "https://ociateam.objectstorage.us-ashburn-1.oci.customer-oci.com/p/Q8BoZynEu6eFUi1vsCrdCWLxJdfyE4lORfBS3vyuOl10VWRGbeCzWws4fO5c1z9x/n/ociateam/b/cra-backup/o/backup_boot_volume.py",
+        "filestodownload": ""
+    },
+    "logging": {
+        "loggroupocid": "ocid1.loggroup.oc1.iad.amaaaaaalh52ctiarbcd7xwd7g5ofa3n572iaec3nsq7guwv5egb752hyiaa",
+        "logocid": "ocid1.log.oc1.iad.amaaaaaalh52ctiaiyzmgx5umn4bg75x2rx2dcak2ifuq64qdbpuylyw263q"
+    },
+    "notificationinfo": {
+        "topicocid": "ocid1.onstopic.oc1.iad.amaaaaaalh52ctia46pgob7yrtnw74wybuswhpr3kbrgn42mwzkvbjtq7duq"
+    },
+    "networkinfo": {
+        "subnetocid": "ocid1.subnet.oc1.iad.aaaaaaaavbogtxo5uxelricigx4jm6nw77xaannxi35v3dpmtorlzzlfjvqq"
+    },
+    "fssmounttargetinfo": {
+        "sharedmounttargetocid": "",
+        "sharedmounttargetip": ""
+    },
+    "schedulerinfo": {
+        "hourlystarttime": "",
+        "dailystarttime": "",
+        "weeklystarttime": "",
+        "cron_expression": ""
+    },
+    "workerinfo": {
+        "maxconcurrentworkerslimit": "10",
+        "maxconcurrenttaskslimit": "2",
+        "linuxworkerimageocid": "ocid1.image.oc1.iad.aaaaaaaa32s2htizwbsi5q2tnbrzii5n67tqmki7en7hkrvxzfww556qggxq",
+        "windowsworkerimageocid": "",
+        "linuxworkershapeinfo": {
+            "shape": "",
+            "ocpus": "2",
+            "mem": "8"
+        }
+    },
+    "region": "us-ashburn-1",
+    "listofads": "",
+    "selectedad": "OrWl:US-ASHBURN-AD-1"
+}

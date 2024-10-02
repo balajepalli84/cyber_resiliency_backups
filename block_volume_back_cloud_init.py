@@ -7,56 +7,64 @@ import string
 import paramiko
 import concurrent.futures
 import os
+import json
 
+# Load constants from the JSON configuration file
+#'
+with open('/home/opc/configuration.json', 'r') as config_file:
+    config_data = json.load(config_file)
+
+# Set up logging to both console and file
 current_datetime = datetime.now()
 datetime_string = current_datetime.strftime("%Y-%m-%d-%H-%M-%S")
-# Set up logging to both console and file
-log_dir = r'C:\Security\CRA\mycode\logs'
+log_dir = r'logs'
 if not os.path.exists(log_dir):
     os.makedirs(log_dir)
-
 log_file = os.path.join(log_dir, f'block_vol_backup_log_file_{datetime_string}.log')
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# File Handler
 file_handler = logging.FileHandler(log_file)
 file_handler.setLevel(logging.INFO)
-
-# Console Handler
 console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
 
-# Format for log messages
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 file_handler.setFormatter(formatter)
 console_handler.setFormatter(formatter)
-
-# Adding both handlers
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
+logger.info(f"Start time: {current_datetime}")
+
 # Initialize the default config
-config = oci.config.from_file()
+signer = oci.auth.signers.InstancePrincipalsSecurityTokenSigner()
 
 # Initialize OCI clients
-compute_client = oci.core.ComputeClient(config)
-blockstorage_client = oci.core.BlockstorageClient(config)
-object_storage_client = oci.object_storage.ObjectStorageClient(config)
-network_client = oci.core.VirtualNetworkClient(config)
+compute_client = oci.core.ComputeClient(config={}, signer=signer)
+blockstorage_client = oci.core.BlockstorageClient(config={}, signer=signer)
+object_storage_client = oci.object_storage.ObjectStorageClient(config={}, signer=signer)
+network_client = oci.core.VirtualNetworkClient(config={}, signer=signer)
 
-logger.info(f"Start time: {current_datetime}")
-# Constants
-compartment_id = "ocid1.compartment.oc1..aaaaaaaafklcekq7wnwrt4zxeizcrmvhltz6wxaqzwksbhbs73yz6mtpi5za"
-os_namespace = 'ociateam'
-bucket_name = "cra-backup"
-temp_instance_subnet_ocid = "ocid1.subnet.oc1.iad.aaaaaaaavbogtxo5uxelricigx4jm6nw77xaannxi35v3dpmtorlzzlfjvqq"
-tag_key = 'CRA-Backup'
-tag_value = 'True'
-private_key_path = r'C:\Security\CRA\mycode\creds\reuse_private.key'
+
+# Extract the necessary constants
+craserverinfo = config_data['craserverinfo']
+compartmentinfo = config_data['compartmentinfo']
+cratagginginfo = config_data['cratagginginfo']
+objectstorageinfo = config_data['objectstorageinfo']
+networkinfo = config_data['networkinfo']
+
+# Load values from the configuration file
+compartment_id = compartmentinfo["parentocid"]
+os_namespace = objectstorageinfo["namespace"]
+bucket_name = objectstorageinfo["immutablebucketname"]
+temp_instance_subnet_ocid = networkinfo["subnetocid"]
+tag_key = cratagginginfo["backupenabledtagname"]
+tag_value = "True"
+private_key_path = 'reuse_private.key'
 public_key = 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDlJruyiWi7+sDGmKvYR0i1Oj9Eean6F5ypQ6JIChYodTrQoOZ7f5fNZT2KIBikGBaL8H6IH5UFtsi6tfEfGDgXfsqO1ArSdND0TdRQnamCGROslzSiD7dKYXPUwG4a9Y3mhVcHpIJdG0ejQZbmlKtipNd0D3DS4nTFGOZsI0P2w1EUy5PKqzc//eNUGwJGFBKioDTt5d7PBDWMqOUeON6g7DsXvlhrqj8LfdL+C4EpN1A22qmaA2dLJdOTAwv5M0itQYk5PUZq+tIKCCMOv5R7E8SLQ3PUPqE1KED+pywchfSC28r+xxiQqFseQUfexK+e5wQaJOx7tTdFkPmFcTJj ssh-key-2024-09-19' 
-oci_objectstorage_preauthrequest="https://ociateam.objectstorage.us-ashburn-1.oci.customer-oci.com/p/dZrKbjAkZcsoDo7SeqLpDvEnREhAku63VJTJla0B-IZZp55w000TcEIFb3glrZjQ/n/ociateam/b/bakcup-vault-secrets/o/backup_boot_volume.py"
+oci_objectstorage_preauthrequest = objectstorageinfo["scriptsbucketpar"]
 
 # Function to list instances by tag
 def list_instances_by_tag(compartment_id, tag_key, tag_value):
@@ -153,7 +161,7 @@ def process_instance(instance):
                 display_name=temporary_instance_name,
                 shape="VM.Standard.E4.Flex",
                 shape_config=oci.core.models.LaunchInstanceShapeConfigDetails(
-                    ocpus=2,
+                    ocpus=2, #read from config file
                     memory_in_gbs=10
                 ),
                 create_vnic_details=oci.core.models.CreateVnicDetails(
@@ -162,6 +170,7 @@ def process_instance(instance):
                 ),
                 source_details=oci.core.models.InstanceSourceViaImageDetails(
                     image_id='ocid1.image.oc1.iad.aaaaaaaa32s2htizwbsi5q2tnbrzii5n67tqmki7en7hkrvxzfww556qggxq'
+                    #read from config file
                 ),
                 metadata={
                     "ssh_authorized_keys": public_key
@@ -183,9 +192,8 @@ def process_instance(instance):
 
             print("New instance is running.")
             logger.info(f"New instance: {new_instance.display_name}, OCID: {new_instance.id}")
-
             # Step 4: Attach all restored block volumes to the new instance
-            for volume_data in restored_volumes:
+            for volume_data in restored_volumes:  
                 attach_details = oci.core.models.AttachParavirtualizedVolumeDetails(
                     instance_id=new_instance.id,
                     volume_id=volume_data['volume_id'],
@@ -254,13 +262,16 @@ def process_instance(instance):
 # Main function to handle concurrent instance processing
 def main():
     instances = list_instances_by_tag(compartment_id, tag_key, tag_value)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(process_instance, instance) for instance in instances]
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                future.result()  # Get the result of the future, which will raise any exceptions
-            except Exception as e:
-                logger.error(f"Error in processing instance: {str(e)}")
+    if instances:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(process_instance, instance) for instance in instances]
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    future.result() 
+                except Exception as e:
+                    logger.error(f"Error in processing instance: {str(e)}")
+    else:
+        logger.info(f"No compute Instances with matching Tags found")
 
 if __name__ == "__main__":
     try:

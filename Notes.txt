@@ -1,0 +1,1 @@
+1) In block volume script, hard coded image details. what to use?

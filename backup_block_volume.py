@@ -14,13 +14,25 @@ def run_command(command):
         return None
     return stdout.decode("utf-8").strip()
 
+# Function to get detailed information about a block device
+def get_volume_info(device):
+    command = f"lsblk /dev/{device} -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE -n"
+    return run_command(command)
+
+# Function to get the root volume
+def get_root_volume():
+    command = "lsblk -n -o NAME,MOUNTPOINT | grep ' /$' | awk '{print $1}'"
+    root_volume = run_command(command)
+    if root_volume:
+        return root_volume.strip()
+    return None
+
 # Function to get attached block volumes (excluding the root volume)
-def get_attached_volumes():
-    # Using lsblk to get block devices, excluding root
-    command = "lsblk -n -o NAME,TYPE,MOUNTPOINT | grep disk | awk '{print $1}' | grep -v '^├─' | grep -v '^└─'"
+def get_attached_volumes(root_volume):
+    command = "lsblk -n -o NAME,TYPE | grep disk | awk '{print $1}'"
     volumes = run_command(command)
     if volumes:
-        return volumes.splitlines()
+        return [volume for volume in volumes.splitlines() if volume != root_volume]
     return []
 
 # Function to get filesystem type of a device
@@ -43,32 +55,38 @@ def mount_volume(device, mount_point, fs_type):
 
 # Function to upload file to OCI Object Storage
 def upload_file_to_object_storage(object_storage, namespace, bucket_name, object_name, file_path):
-    namespace_name = namespace
-    bucket_name = bucket_name
-    object_name = object_name
-    file_path = file_path
-    
     with open(file_path, 'rb') as file:
-        object_storage.put_object(namespace_name, bucket_name, object_name, file)
+        object_storage.put_object(namespace, bucket_name, object_name, file)
 
 # Main function to discover and mount block volumes, then upload files to OCI Object Storage
 def mount_and_upload_volumes(bucket_name, instance_name):
-    # Get list of attached block volumes
-    volumes = get_attached_volumes()
+    # Get the root volume
+    root_volume = get_root_volume()
+    if not root_volume:
+        print("Error: Unable to determine root volume.")
+        return
+    
+    # Print root volume info
+    root_info = get_volume_info(root_volume)
+    print(f"Root Volume Information:\n{root_info}")
+    
+    # Get list of attached block volumes excluding the root volume
+    volumes = get_attached_volumes(root_volume)
     if not volumes:
         print("No block volumes attached.")
         return
     
-    print(f"Found volumes: {volumes}")
+    # Print other volumes' information
+    print("\nOther Attached Volumes Information:")
+    for volume in volumes:
+        volume_info = get_volume_info(volume)
+        print(volume_info)
+    
     signer = oci.auth.signers.InstancePrincipalsSecurityTokenSigner()
     object_storage = oci.object_storage.ObjectStorageClient(config={}, signer=signer)    
     namespace = object_storage.get_namespace().data  # Get the Object Storage namespace
     
     for volume in volumes:
-        # Skip the root volume
-        if volume == "sda":
-            continue
-
         # Get the filesystem type
         fs_type = get_filesystem(volume)
         
@@ -82,6 +100,7 @@ def mount_and_upload_volumes(bucket_name, instance_name):
         
         # Mount the volume
         mount_volume(volume, mount_point, fs_type)
+        
         # Loop over each file in the volume
         for root, dirs, files in os.walk(mount_point):
             for file in files:

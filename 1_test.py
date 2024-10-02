@@ -4,48 +4,24 @@ import time
 import logging
 from datetime import datetime
 import concurrent.futures
-
 current_datetime = datetime.now()
 datetime_string = current_datetime.strftime("%Y-%m-%d-%H-%M-%S")
-# Set up logging
-log_dir = r'C:\Security\CRA\mycode\logs'
-if not os.path.exists(log_dir):
-    os.makedirs(log_dir)  
-log_file = os.path.join(log_dir, f'boot_vol_backup_log_file_{datetime_string}.log')
-logger = logging.getLogger(__name__)  
-logger.setLevel(logging.DEBUG)  
-file_handler = logging.FileHandler(log_file)
-file_handler.setLevel(logging.DEBUG)  
-
-# Create console handler for printing logs to the console
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)  
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-file_handler.setFormatter(formatter)
-console_handler.setFormatter(formatter)
-logger.addHandler(file_handler)
-logger.addHandler(console_handler)
-
-config = oci.config.from_file()
-
-# Initialize OCI clients
-try:
-    compute_client = oci.core.ComputeClient(config)
-    blockstorage_client = oci.core.BlockstorageClient(config)
-    object_storage_client = oci.object_storage.ObjectStorageClient(config)
-    logger.info("OCI clients initialized successfully.")
-except Exception as e:
-    logger.error(f"Failed to initialize OCI clients: {str(e)}")
-    raise
-
-# Parameters
-
-compartment_id = "ocid1.compartment.oc1..aaaaaaaafklcekq7wnwrt4zxeizcrmvhltz6wxaqzwksbhbs73yz6mtpi5za"
-instance_id = "ocid1.instance.oc1.iad.anuwcljtc3adhhqcz5dtjvpyfc7fzu34wvoebq56qsnimvfk5hg5z3di473a"
-os_namespace = 'ociateam'
-bucket_name = "cra-backup"
-temp_instance_subnet_ocid = "ocid1.subnet.oc1.iad.aaaaaaaavbogtxo5uxelricigx4jm6nw77xaannxi35v3dpmtorlzzlfjvqq"
-tag_key = 'CRA-Backup'
-tag_value = 'True'
-
-print('all done...')
+config = oci.config.from_file()  # This assumes your config is in ~/.oci/config
+blockstorage_client = oci.core.BlockstorageClient(config)
+compute_client = oci.core.ComputeClient(config)
+restored_volumes = 'ocid1.volume.oc1.iad.abuwcljtbc4szrz4tbp6rgznponac5oywvqn5fv2kgolvdpxgydghod4uf5q','ocid1.volume.oc1.iad.abuwcljt3vmixkkhffsaa6ugaeapp2i4ps4iuambbptxcmbkgta7wnpmy6rq'
+for volume_data in restored_volumes:  
+    attach_details = oci.core.models.AttachParavirtualizedVolumeDetails(
+        instance_id='ocid1.instance.oc1.iad.anuwcljtc3adhhqcejt4cv5vwt657t3huc4w5h3ojaynu6qpi443tvnsqcjq',
+        volume_id=volume_data['volume_id'],
+        display_name=f"{volume_data['instance_name']}_attached_volume_{datetime_string}"
+    )
+    attach_response = compute_client.attach_volume(attach_details).data
+    print(f"Attaching volume {volume_data['volume_id']} from instance {volume_data['instance_name']} to new instance {new_instance.display_name}")
+    # Wait for attachment to complete
+    while True:
+        attachment_status = compute_client.get_volume_attachment(attach_response.id).data.lifecycle_state
+        if attachment_status == "ATTACHED":
+            break
+        time.sleep(10)
+    print(f"Volume {volume_data['volume_id']} attached successfully.")

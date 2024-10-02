@@ -1,0 +1,2 @@
+sudo [ -d /mnt_blocks ] || mkdir /mnt_blocks
+sudo mount /dev/sdb1 /mnt_blocks

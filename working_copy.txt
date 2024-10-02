@@ -1,0 +1,36 @@
+import oci
+import os
+import shutil
+
+# Initialize the Object Storage Client
+#config = oci.config.from_file("~/.oci/config")  # Path to your OCI config file
+config = {
+    "user": "ocid1.user.oc1..aaaaaaaafaq7vh72xyy3gj47vooic6hi7a2w2tvkzplgcjlohe7aawa4n6ea",
+    "key_file": "/home/opc/private.pem",
+    "fingerprint": "a3:5e:1d:e2:23:29:51:55:1a:f4:7f:eb:0f:8d:44:84",
+    "tenancy": "ocid1.tenancy.oc1..aaaaaaaaa3qmjxr43tjexx75r6gwk6vjw22ermohbw2vbxyhczksgjir7xdq",
+    "region": "us-ashburn-1"
+}
+
+from oci.config import validate_config
+object_storage_client = oci.object_storage.ObjectStorageClient(config)
+os_namespace = object_storage_client.get_namespace().data  # Get the Object Storage namespace
+bucket_name = 'meeting_recording'  # Replace with your bucket name
+
+def upload_directory_to_object_storage(object_storage_client, directory_path, bucket_name):
+    source_dir = '/mnt_blocks'
+    output_zip_file = '/home/opc/my_archive.zip'
+    shutil.make_archive(output_zip_file, 'zip', source_dir)
+
+    upload_manager = oci.object_storage.UploadManager(object_storage_client, allow_parallel_uploads=True)
+    upload_manager.upload_file(
+        namespace_name=os_namespace,
+        bucket_name=bucket_name,
+        object_name='my_zip_file',
+        file_path=output_zip_file)
+
+# Define the directory where your block volume is mounted
+block_volume_mount_path = '/mnt_blocks'  # Change this to your block volume mount point
+
+# Start uploading all files from the mounted block storage to OCI Object Storage
+upload_directory_to_object_storage(object_storage_client, block_volume_mount_path, bucket_name)
