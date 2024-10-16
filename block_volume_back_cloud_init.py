@@ -238,7 +238,7 @@ def process_instance(instance):
                 send_log_to_oci("INFO",f"Download PY script - SSH error {new_instance.display_name}, {error1}")
 
                 # Command 2: Run script
-                stdin, stdout2, stderr2 = ssh.exec_command(f"sudo python /home/opc/backup_script.py {bucket_name} {instance.display_name}_{datetime_string}")
+                stdin, stdout2, stderr2 = ssh.exec_command(f"sudo python /home/opc/backup_script.py {bucket_name} {instance.display_name}_{datetime_string} {log_id}")
                 output2 = stdout2.read().decode()
                 error2 = stderr2.read().decode()
                 send_log_to_oci("INFO",f"SSH output - backupscript {new_instance.display_name}, {output2}")
